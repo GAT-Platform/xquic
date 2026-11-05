@@ -670,6 +670,9 @@ xqc_send_ctl_on_packet_sent(xqc_send_ctl_t *send_ctl, xqc_pn_ctl_t *pn_ctl, xqc_
                           now, xqc_conn_get_idle_timeout(send_ctl->ctl_conn) * 1000);
         }
         unsigned flags = packet_out->po_is_app_limited ? XQC_DELIVERY_APP_LIMITED : 0;
+        if (packet_out->po_frame_types & (XQC_FRAME_BIT_STREAM | XQC_FRAME_BIT_DATAGRAM)) {
+            flags |= XQC_DELIVERY_APPLICATION;
+        }
         xqc_connection_t *conn = send_ctl->ctl_conn;
         if (!xqc_conn_is_handshake_confirmed(conn)) flags |= XQC_DELIVERY_HANDSHAKE;
         if (conn->conn_flag & XQC_CONN_FLAG_DATA_BLOCKED) flags |= XQC_DELIVERY_FLOW_LIMITED;

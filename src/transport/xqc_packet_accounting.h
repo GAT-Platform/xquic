@@ -10,6 +10,7 @@
 typedef struct xqc_packet_accounting_entry_s xqc_packet_accounting_entry_t;
 typedef struct {
     uint64_t prior_delivered, delivered_us, first_sent_us, sent_us, pn, pns;
+    uint64_t prior_application_delivered;
     unsigned flags;
 } xqc_delivery_anchor_t;
 typedef struct {
@@ -18,6 +19,8 @@ typedef struct {
     unsigned incomplete;
     xqc_packet_stats_v1_t counters;
     xqc_delivery_observation_v1_t observation;
+    xqc_delivery_observation_v2_t evidence;
+    uint64_t application_sent, application_acked, application_ack_before;
     xqc_delivery_anchor_t anchor;
     uint64_t first_sent_us, delivered_us, observation_path, ack_before;
     unsigned path_initialized, unsupported_path, ack_active, anchor_valid, batch_flags;

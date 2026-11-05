@@ -89,6 +89,7 @@ xqc_packet_accounting_sent_at(xqc_packet_accounting_t *a, uint64_t path,
         a->delivered_us = now;
     }
     e->delivery.prior_delivered = a->counters.acked_bytes;
+    e->delivery.prior_application_delivered = a->application_acked;
     e->delivery.delivered_us = a->delivered_us;
     e->delivery.first_sent_us = a->first_sent_us;
     e->delivery.sent_us = now;
@@ -100,6 +101,9 @@ xqc_packet_accounting_sent_at(xqc_packet_accounting_t *a, uint64_t path,
     ++a->retained;
     xqc_packet_accounting_add(a, &a->counters.sent_packets, 1);
     xqc_packet_accounting_add(a, &a->counters.sent_bytes, bytes);
+    if (flags & XQC_DELIVERY_APPLICATION) {
+        xqc_packet_accounting_add(a, &a->application_sent, bytes);
+    }
     if (retransmission) {
         xqc_packet_accounting_add(a, &a->counters.retransmitted_packets, 1);
         xqc_packet_accounting_add(a, &a->counters.retransmitted_bytes, bytes);
@@ -128,6 +132,9 @@ xqc_packet_accounting_ack(xqc_packet_accounting_t *a, uint64_t path,
             }
             xqc_packet_accounting_add(a, &a->counters.acked_packets, 1);
             xqc_packet_accounting_add(a, &a->counters.acked_bytes, e->bytes);
+            if (e->delivery.flags & XQC_DELIVERY_APPLICATION) {
+                xqc_packet_accounting_add(a, &a->application_acked, e->bytes);
+            }
             *link = e->next;
             free(e);
             --a->retained;
@@ -165,6 +172,7 @@ void
 xqc_packet_accounting_begin_ack(xqc_packet_accounting_t *a, uint64_t path)
 {
     a->ack_before = a->counters.acked_bytes;
+    a->application_ack_before = a->application_acked;
     a->ack_active = 1;
     a->anchor_valid = 0;
     a->batch_flags = 0;
@@ -187,6 +195,10 @@ xqc_packet_accounting_end_ack(xqc_packet_accounting_t *a, uint64_t now, uint64_t
     o->flags = a->batch_flags;
     o->total_acked_bytes = a->counters.acked_bytes;
     o->newly_acked_bytes = a->counters.acked_bytes - a->ack_before;
+    a->evidence.application_sent_bytes = a->application_sent;
+    a->evidence.application_acked_bytes = a->application_acked;
+    a->evidence.newly_acked_application_bytes = a->application_acked - a->application_ack_before;
+    a->evidence.application_delivered_bytes = a->application_acked - a->anchor.prior_application_delivered;
     if (a->incomplete || seq == UINT64_MAX) { o->status = XQC_DELIVERY_INCOMPLETE; return; }
     if (a->unsupported_path) { o->status = XQC_DELIVERY_UNSUPPORTED_PATH; return; }
     const xqc_delivery_anchor_t *c = &a->anchor;

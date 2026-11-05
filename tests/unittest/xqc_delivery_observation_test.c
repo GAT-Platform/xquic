@@ -66,6 +66,9 @@ void xqc_test_delivery_observation(void)
 
 void xqc_test_delivery_batch_and_invalid(void)
 {
+    CU_ASSERT_NOT_EQUAL(xqc_conn_get_delivery_observation_v2(NULL, NULL, NULL), XQC_OK);
+    xqc_delivery_observation_v2_t invalid;
+    CU_ASSERT_NOT_EQUAL(xqc_conn_get_delivery_observation_v2(NULL, NULL, &invalid), XQC_OK);
     for (unsigned reverse = 0; reverse < 2; ++reverse) {
         xqc_packet_accounting_t a = {0};
         xqc_packet_accounting_sent_at(&a, 0, 2, 1, 1000, 0, 1000000, 0, 0);
@@ -109,5 +112,48 @@ void xqc_test_delivery_batch_and_invalid(void)
     xqc_packet_accounting_ack(&a, 1, 2, 3, 3);
     xqc_packet_accounting_end_ack(&a, 400, 10);
     CU_ASSERT_EQUAL(a.observation.status, XQC_DELIVERY_UNSUPPORTED_PATH);
+    xqc_packet_accounting_destroy(&a);
+}
+
+void xqc_test_delivery_provenance(void)
+{
+    xqc_packet_accounting_t a = {0};
+    /* A PING and data sent before either ACK. Only the PING's later ACK
+     * triggers the second sample, but its interval includes real data. */
+    xqc_packet_accounting_sent_at(&a, 0, 2, 1, 1200, 0, 1000000, 0, XQC_DELIVERY_APPLICATION);
+    xqc_packet_accounting_sent_at(&a, 0, 2, 2, 30, 0, 1010000, 1200, 0);
+    xqc_packet_accounting_begin_ack(&a, 0);
+    xqc_packet_accounting_ack(&a, 0, 2, 1, 1);
+    xqc_packet_accounting_end_ack(&a, 1100000, 10000);
+    CU_ASSERT_EQUAL(a.evidence.application_sent_bytes, 1200);
+    CU_ASSERT_EQUAL(a.evidence.application_acked_bytes, 1200);
+    xqc_packet_accounting_begin_ack(&a, 0);
+    xqc_packet_accounting_ack(&a, 0, 2, 2, 2);
+    xqc_packet_accounting_end_ack(&a, 1120000, 10000);
+    CU_ASSERT_EQUAL(a.observation.newly_acked_bytes, 30);
+    CU_ASSERT_EQUAL(a.evidence.newly_acked_application_bytes, 0);
+    CU_ASSERT_EQUAL(a.evidence.application_delivered_bytes, 1200);
+    CU_ASSERT_EQUAL(a.observation.delivered_bytes, 1230);
+    /* A subsequent pure control interval has zero data evidence. */
+    xqc_packet_accounting_sent_at(&a, 0, 2, 3, 30, 0, 2000000, 0, 0);
+    xqc_packet_accounting_begin_ack(&a, 0);
+    xqc_packet_accounting_ack(&a, 0, 2, 3, 3);
+    xqc_packet_accounting_end_ack(&a, 2100000, 10000);
+    CU_ASSERT_EQUAL(a.evidence.application_delivered_bytes, 0);
+    uint64_t seq = a.observation.seq;
+    xqc_packet_accounting_begin_ack(&a, 0);
+    xqc_packet_accounting_ack(&a, 0, 2, 1, 3);
+    xqc_packet_accounting_end_ack(&a, 2200000, 10000);
+    CU_ASSERT_EQUAL(a.observation.seq, seq);
+    CU_ASSERT_EQUAL(a.evidence.application_acked_bytes, 1200);
+    /* Loss and late original + retransmission ACK count each transmission. */
+    xqc_packet_accounting_sent_at(&a, 0, 2, 4, 100, 0, 3000000, 0, XQC_DELIVERY_APPLICATION);
+    xqc_packet_accounting_lost(&a, 0, 2, 4);
+    xqc_packet_accounting_sent_at(&a, 0, 2, 5, 100, 1, 3100000, 0, XQC_DELIVERY_APPLICATION);
+    xqc_packet_accounting_begin_ack(&a, 0);
+    xqc_packet_accounting_ack(&a, 0, 2, 4, 5);
+    xqc_packet_accounting_end_ack(&a, 3200000, 10000);
+    CU_ASSERT_EQUAL(a.evidence.application_acked_bytes, 1400);
+    CU_ASSERT_EQUAL(a.evidence.newly_acked_application_bytes, 200);
     xqc_packet_accounting_destroy(&a);
 }

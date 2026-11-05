@@ -45,6 +45,7 @@
 void xqc_test_packet_accounting(void);
 void xqc_test_delivery_observation(void);
 void xqc_test_delivery_batch_and_invalid(void);
+void xqc_test_delivery_provenance(void);
 void xqc_test_packet_accounting_reordered_oracle(void);
 
 static int xqc_init_suite(void) { return 0; }
@@ -70,6 +71,7 @@ main()
     if (!CU_add_test(pSuite, "xqc_test_packet_accounting", xqc_test_packet_accounting)
         || !CU_add_test(pSuite, "xqc_test_delivery_observation", xqc_test_delivery_observation)
         || !CU_add_test(pSuite, "xqc_test_delivery_batch_and_invalid", xqc_test_delivery_batch_and_invalid)
+        || !CU_add_test(pSuite, "xqc_test_delivery_provenance", xqc_test_delivery_provenance)
         || !CU_add_test(pSuite, "xqc_test_packet_accounting_reordered_oracle", xqc_test_packet_accounting_reordered_oracle)
         || !CU_add_test(pSuite, "xqc_test_get_random", xqc_test_get_random)
         || !CU_add_test(pSuite, "xqc_test_engine_create", xqc_test_engine_create)

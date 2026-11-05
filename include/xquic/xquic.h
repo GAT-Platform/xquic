@@ -1588,7 +1588,8 @@ enum {
 enum {
     XQC_DELIVERY_APP_LIMITED = 1, XQC_DELIVERY_HANDSHAKE = 2,
     XQC_DELIVERY_FLOW_LIMITED = 4, XQC_DELIVERY_FLOW_UNKNOWN = 8,
-    XQC_DELIVERY_SHORT_INTERVAL = 16
+    XQC_DELIVERY_SHORT_INTERVAL = 16,
+    XQC_DELIVERY_APPLICATION = 32 /* sender-local STREAM/DATAGRAM packet */
 };
 typedef struct {
     uint64_t seq, path_id, ack_time_us, exported_at_us;
@@ -1596,6 +1597,17 @@ typedef struct {
     uint64_t delivered_bytes, send_elapsed_us, ack_elapsed_us, interval_us, rate_bps;
     uint32_t status, flags;
 } xqc_delivery_observation_v1_t;
+
+/* Additive ABI: counters are encrypted packet bytes, not unique media bytes.
+ * Totals and interval evidence are captured at the same ACK event as v1. */
+typedef struct {
+    xqc_delivery_observation_v1_t v1;
+    uint64_t application_sent_bytes, application_acked_bytes;
+    uint64_t newly_acked_application_bytes, application_delivered_bytes;
+} xqc_delivery_observation_v2_t;
+
+XQC_EXPORT_PUBLIC_API xqc_int_t xqc_conn_get_delivery_observation_v2(
+    xqc_engine_t *engine, const xqc_cid_t *cid, xqc_delivery_observation_v2_t *observation);
 
 XQC_EXPORT_PUBLIC_API xqc_int_t xqc_conn_get_delivery_observation_v1(
     xqc_engine_t *engine, const xqc_cid_t *cid, xqc_delivery_observation_v1_t *observation);

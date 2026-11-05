@@ -3746,6 +3746,23 @@ xqc_conn_get_delivery_observation_v1(xqc_engine_t *engine, const xqc_cid_t *cid,
     return XQC_OK;
 }
 
+xqc_int_t
+xqc_conn_get_delivery_observation_v2(xqc_engine_t *engine, const xqc_cid_t *cid,
+    xqc_delivery_observation_v2_t *observation)
+{
+    if (!observation) return -XQC_EPARAM;
+    memset(observation, 0, sizeof(*observation));
+    xqc_int_t rc = xqc_conn_get_delivery_observation_v1(engine, cid, &observation->v1);
+    if (rc != XQC_OK) return rc;
+    xqc_connection_t *conn = xqc_engine_conns_hash_find(engine, cid, 's');
+    const xqc_delivery_observation_v2_t *e = &conn->packet_accounting.evidence;
+    observation->application_sent_bytes = e->application_sent_bytes;
+    observation->application_acked_bytes = e->application_acked_bytes;
+    observation->newly_acked_application_bytes = e->newly_acked_application_bytes;
+    observation->application_delivered_bytes = e->application_delivered_bytes;
+    return XQC_OK;
+}
+
 xqc_conn_stats_t
 xqc_conn_get_stats(xqc_engine_t *engine, const xqc_cid_t *cid)
 {
