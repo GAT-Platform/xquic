@@ -215,6 +215,7 @@ set(
     "src/transport/xqc_packet_out.c"
     "src/transport/xqc_packet_in.c"
     "src/transport/xqc_send_ctl.c"
+    "src/transport/xqc_packet_accounting.c"
     "src/transport/xqc_send_queue.c"
     "src/transport/xqc_packet.c"
     "src/transport/xqc_frame.c"

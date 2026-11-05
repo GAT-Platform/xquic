@@ -1564,6 +1564,22 @@ typedef struct xqc_path_metrics_s {
 /**
  * @brief connection stats
  */
+/* Versioned additive export; legacy xqc_conn_stats_t ABI is unchanged.
+ * Counts ACK-eliciting transmissions (including handshake/control), by packet
+ * number and path, not unique STREAM/media payload. Bytes include QUIC/AEAD.
+ * Lost is cumulative first loss declarations; a late ACK may also count as ACK.
+ * complete=0 means retained-history/allocation/counter limits were exceeded;
+ * the counters are then partial observations, never capacity inputs. */
+typedef struct {
+    uint64_t sent_packets, acked_packets, lost_packets, retransmitted_packets;
+    uint64_t sent_bytes, acked_bytes, lost_bytes, retransmitted_bytes;
+    xqc_usec_t latest_rtt;
+    uint8_t complete;
+} xqc_packet_stats_v1_t;
+
+XQC_EXPORT_PUBLIC_API xqc_int_t xqc_conn_get_packet_stats_v1(
+    xqc_engine_t *engine, const xqc_cid_t *cid, xqc_packet_stats_v1_t *stats);
+
 typedef struct xqc_conn_stats_s {
     uint32_t            send_count;
     /** 仅统计携带业务数据的包（STREAM/DATAGRAM），不含握手、ACK、控制包等 */

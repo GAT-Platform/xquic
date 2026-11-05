@@ -661,6 +661,12 @@ xqc_send_ctl_on_packet_sent(xqc_send_ctl_t *send_ctl, xqc_pn_ctl_t *pn_ctl, xqc_
         pn_ctl->ctl_largest_sent[pns] = packet_out->po_pkt.pkt_num;
     }
 
+    if (XQC_IS_ACK_ELICITING(packet_out->po_frame_types)) {
+        xqc_packet_accounting_sent(&send_ctl->ctl_conn->packet_accounting,
+            send_ctl->ctl_path->path_id, pns, packet_out->po_pkt.pkt_num,
+            packet_out->po_enc_size,
+            !!(packet_out->po_flag & (XQC_POF_LOST | XQC_POF_TLP | XQC_POF_REINJECTED_REPLICA)));
+    }
     send_ctl->ctl_bytes_send += packet_out->po_enc_size;
     if (packet_out->po_frame_types & (XQC_FRAME_BIT_STREAM | XQC_FRAME_BIT_DATAGRAM)) {
         send_ctl->ctl_app_bytes_send += packet_out->po_enc_size;
@@ -856,6 +862,14 @@ xqc_send_ctl_on_ack_received(xqc_send_ctl_t *send_ctl, xqc_pn_ctl_t *pn_ctl, xqc
     if (xqc_send_ctl_detect_optimistic_ack_attack(send_ctl, pn_ctl, ack_info, ack_recv_time) < 0) {
         XQC_CONN_ERR(conn, TRA_PROTOCOL_VIOLATION);
         return -XQC_EPROTO;
+    }
+
+    /* Read the peer's actual ranges before packet ownership cleanup. Never use
+     * po_acked: that flag also propagates success from retransmission copies. */
+    for (unsigned i = 0; i < ack_info->n_ranges; ++i) {
+        xqc_packet_accounting_ack(&conn->packet_accounting,
+            send_ctl->ctl_path->path_id, pns,
+            ack_info->ranges[i].low, ack_info->ranges[i].high);
     }
 
     xqc_packet_number_t largest_acked_ack = xqc_ack_sent_record_on_ack(&pn_ctl->ack_sent_record[pns], ack_info);
@@ -1325,6 +1339,8 @@ xqc_send_ctl_detect_lost(xqc_send_ctl_t *send_ctl, xqc_send_queue_t *send_queue,
 			|| (lost_pn != XQC_MAX_UINT64_VALUE && po->po_pkt.pkt_num <= lost_pn))
 		{
             if (po->po_flag & XQC_POF_IN_FLIGHT) {
+                xqc_packet_accounting_lost(&conn->packet_accounting,
+                    po->po_path_id, pns, po->po_pkt.pkt_num);
 
                 /* reinjection */
                 if (conn->enable_multipath

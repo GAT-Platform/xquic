@@ -9,6 +9,7 @@
 #include <xquic/xquic.h>
 #include <xquic/xquic_typedef.h>
 #include "src/transport/xqc_cid.h"
+#include "src/transport/xqc_packet_accounting.h"
 #include "src/common/xqc_log.h"
 #include "src/common/xqc_log_event_callback.h"
 #include "src/common/xqc_common.h"
@@ -452,6 +453,7 @@ struct xqc_connection_s {
 
     /* internal loss detection stats */
     uint32_t                        detected_loss_cnt;
+    xqc_packet_accounting_t         packet_accounting;
 
     /* max consecutive PTO cnt among all paths */
     uint16_t                        max_pto_cnt;

@@ -42,6 +42,9 @@
 #include "xqc_fec_test.h"
 #include "xqc_ack_with_timestamp_test.h"
 
+void xqc_test_packet_accounting(void);
+void xqc_test_packet_accounting_reordered_oracle(void);
+
 static int xqc_init_suite(void) { return 0; }
 static int xqc_clean_suite(void) { return 0; }
 
@@ -62,7 +65,9 @@ main()
         return (int)CU_get_error();
     }     
 
-    if (!CU_add_test(pSuite, "xqc_test_get_random", xqc_test_get_random)
+    if (!CU_add_test(pSuite, "xqc_test_packet_accounting", xqc_test_packet_accounting)
+        || !CU_add_test(pSuite, "xqc_test_packet_accounting_reordered_oracle", xqc_test_packet_accounting_reordered_oracle)
+        || !CU_add_test(pSuite, "xqc_test_get_random", xqc_test_get_random)
         || !CU_add_test(pSuite, "xqc_test_engine_create", xqc_test_engine_create)
         || !CU_add_test(pSuite, "xqc_test_conn_create", xqc_test_conn_create)
         || !CU_add_test(pSuite, "xqc_test_pq", xqc_test_pq)

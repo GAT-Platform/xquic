@@ -1667,6 +1667,7 @@ xqc_conn_destroy(xqc_connection_t *xc)
 
     /* free pool, must be the last thing to do */
     if (xc->conn_pool) {
+        xqc_packet_accounting_destroy(&xc->packet_accounting);
         xqc_destroy_pool(xc->conn_pool);
     }
 }
@@ -3704,6 +3705,28 @@ xqc_conn_get_stats_internal(xqc_connection_t *conn, xqc_conn_stats_t *conn_stats
     xqc_conn_info_print(conn, conn_stats);
 
     xqc_extern_conn_info_print(conn, conn_stats);
+}
+
+xqc_int_t
+xqc_conn_get_packet_stats_v1(xqc_engine_t *engine, const xqc_cid_t *cid,
+    xqc_packet_stats_v1_t *stats)
+{
+    xqc_connection_t *conn;
+    if (!engine || !cid || !stats) {
+        return -XQC_EPARAM;
+    }
+    memset(stats, 0, sizeof(*stats));
+    conn = xqc_engine_conns_hash_find(engine, cid, 's');
+    if (!conn) {
+        return -XQC_ECONN_NFOUND;
+    }
+    *stats = conn->packet_accounting.counters;
+    stats->complete = !conn->packet_accounting.incomplete;
+    if (conn->conn_initial_path && conn->conn_initial_path->path_send_ctl) {
+        xqc_send_ctl_t *ctl = conn->conn_initial_path->path_send_ctl;
+        stats->latest_rtt = ctl->ctl_first_rtt_sample_time ? ctl->ctl_latest_rtt : 0;
+    }
+    return XQC_OK;
 }
 
 xqc_conn_stats_t
