@@ -1314,7 +1314,7 @@ typedef enum {
 typedef struct xqc_conn_settings_s {
     /** default: 0 */
     int                         pacing_on;
-    /** client sends PING to keepalive, default:0 */
+    /** Idle client keepalive; server probes outstanding data after PTO. Default:0 */
     int                         ping_on;
     /** default: xqc_cubic_cb */
     xqc_cong_ctrl_callback_t    cong_ctrl_callback; 

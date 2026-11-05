@@ -638,8 +638,7 @@ xqc_conn_init_timer_manager(xqc_connection_t *conn)
 
     xqc_timer_set(timer_manager, XQC_TIMER_CONN_IDLE, now, xqc_conn_get_idle_timeout(conn) * 1000);
 
-    if (conn->conn_settings.ping_on
-        && conn->conn_type == XQC_CONN_TYPE_CLIENT)
+    if (conn->conn_settings.ping_on)
     {
         xqc_timer_set(timer_manager, XQC_TIMER_PING, now, XQC_PING_TIMEOUT * 1000);
     }

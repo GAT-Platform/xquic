@@ -365,6 +365,7 @@ struct xqc_connection_s {
     xqc_usec_t                      conn_last_send_time;
     xqc_usec_t                      last_app_data_send_time;  /* last time we sent STREAM/CRYPTO/DATAGRAM; for idle-based PING */
     xqc_usec_t                      conn_last_recv_time;
+    uint8_t                         idle_timer_restarted_after_recv;
     xqc_usec_t                      conn_hsk_recv_time;
 
     xqc_conn_flow_ctl_t             conn_flow_ctl;

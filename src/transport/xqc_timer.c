@@ -222,18 +222,33 @@ xqc_timer_ping_timeout(xqc_timer_type_t type, xqc_usec_t now, void *user_data)
 {
     xqc_connection_t *conn = (xqc_connection_t *)user_data;
     xqc_usec_t ping_idle_us = (xqc_usec_t)XQC_PING_TIMEOUT * 1000;  /* 1s in usec */
+    if (!conn->conn_settings.ping_on) return;
     xqc_usec_t idle = (conn->last_app_data_send_time == 0)
         ? ping_idle_us
         : (now - conn->last_app_data_send_time);
 
-    /* Send PING only when no app data has been sent in the past 1 second */
-    if (idle >= ping_idle_us) {
+    /* A server with lost feedback otherwise sends only non-eliciting ACKs
+     * while its STREAM retransmission PTO backs off. A bounded PING elicits
+     * an ACK after recovery, enabling normal loss detection to retransmit.
+     * Healthy/empty servers add no periodic wire traffic. */
+    xqc_bool_t probe = conn->conn_type == XQC_CONN_TYPE_CLIENT;
+    if (!probe && xqc_conn_is_handshake_confirmed(conn)) {
+        xqc_list_head_t *pos;
+        xqc_list_for_each(pos, &conn->conn_paths_list) {
+            xqc_path_ctx_t *path = xqc_list_entry(pos, xqc_path_ctx_t, path_list);
+            xqc_send_ctl_t *ctl = path->path_send_ctl;
+            if (path->path_state == XQC_PATH_STATE_ACTIVE && ctl->ctl_pto_count > 0
+                && ctl->ctl_bytes_ack_eliciting_inflight[XQC_PNS_APP_DATA] > 0) {
+                probe = XQC_TRUE;
+                break;
+            }
+        }
+    }
+    if (probe && idle >= ping_idle_us) {
         conn->conn_flag |= XQC_CONN_FLAG_PING;
     }
 
-    if (conn->conn_settings.ping_on && conn->conn_type == XQC_CONN_TYPE_CLIENT) {
-        xqc_timer_set(&conn->conn_timer_manager, XQC_TIMER_PING, now, XQC_PING_TIMEOUT * 1000);
-    }
+    xqc_timer_set(&conn->conn_timer_manager, XQC_TIMER_PING, now, ping_idle_us);
 }
 
 void

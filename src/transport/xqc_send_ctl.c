@@ -662,6 +662,13 @@ xqc_send_ctl_on_packet_sent(xqc_send_ctl_t *send_ctl, xqc_pn_ctl_t *pn_ctl, xqc_
     }
 
     if (XQC_IS_ACK_ELICITING(packet_out->po_frame_types)) {
+        /* RFC 9000 10.1: only the first ack-eliciting send after a receive
+         * restarts idle. Repeated unanswered probes must still time out. */
+        if (!send_ctl->ctl_conn->idle_timer_restarted_after_recv) {
+            send_ctl->ctl_conn->idle_timer_restarted_after_recv = 1;
+            xqc_timer_set(&send_ctl->ctl_conn->conn_timer_manager, XQC_TIMER_CONN_IDLE,
+                          now, xqc_conn_get_idle_timeout(send_ctl->ctl_conn) * 1000);
+        }
         unsigned flags = packet_out->po_is_app_limited ? XQC_DELIVERY_APP_LIMITED : 0;
         xqc_connection_t *conn = send_ctl->ctl_conn;
         if (!xqc_conn_is_handshake_confirmed(conn)) flags |= XQC_DELIVERY_HANDSHAKE;

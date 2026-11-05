@@ -1276,6 +1276,7 @@ process:
 
     xqc_conn_process_packet_recved_path(conn, &scid, packet_in_size, recv_time);
 
+    conn->idle_timer_restarted_after_recv = 0;
     xqc_timer_set(&conn->conn_timer_manager, XQC_TIMER_CONN_IDLE,
                   recv_time, xqc_conn_get_idle_timeout(conn) * 1000);
 

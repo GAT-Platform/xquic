@@ -16,6 +16,81 @@
 #include "src/transport/xqc_frame.h"
 
 void
+xqc_test_idle_timer_restart()
+{
+    xqc_engine_t *engine = test_create_engine();
+    const xqc_cid_t *cid = test_cid_connect(engine);
+    xqc_connection_t *conn = xqc_engine_conns_hash_find(engine, cid, 's');
+    xqc_send_ctl_t *ctl = conn->conn_initial_path->path_send_ctl;
+    conn->local_settings.max_idle_timeout = 10000;
+    conn->conn_settings.disable_pn_skipping = 1;
+    conn->idle_timer_restarted_after_recv = 0; /* fixture: a packet was just received */
+    xqc_timer_set(&conn->conn_timer_manager, XQC_TIMER_CONN_IDLE, 1000000, 10000000);
+    xqc_packet_out_t packet = {0};
+    packet.po_pkt.pkt_pns = XQC_PNS_APP_DATA;
+    packet.po_pkt.pkt_type = XQC_PTYPE_SHORT_HEADER;
+    packet.po_pkt.pkt_num = 12345;
+    packet.po_frame_types = XQC_FRAME_BIT_ACK;
+    packet.po_used_size = 14;
+    packet.po_enc_size = 30;
+    packet.po_flag = XQC_POF_IN_FLIGHT | XQC_POF_PMTUD_PROBING;
+    xqc_send_ctl_on_packet_sent(ctl, conn->conn_initial_path->path_pn_ctl, &packet, 2000000);
+    CU_ASSERT_EQUAL(conn->conn_timer_manager.timer[XQC_TIMER_CONN_IDLE].expire_time, 11000000);
+    packet.po_frame_types = XQC_FRAME_BIT_PING;
+    packet.po_sent_time = 3000000;
+    xqc_send_ctl_on_packet_sent(ctl, conn->conn_initial_path->path_pn_ctl, &packet, 3000000);
+    CU_ASSERT_EQUAL(conn->conn_timer_manager.timer[XQC_TIMER_CONN_IDLE].expire_time, 13000000);
+    /* Repeated unanswered PINGs must not keep a dead peer alive forever. */
+    ++packet.po_pkt.pkt_num;
+    packet.po_sent_time = 9000000;
+    xqc_send_ctl_on_packet_sent(ctl, conn->conn_initial_path->path_pn_ctl, &packet, 9000000);
+    CU_ASSERT_EQUAL(conn->conn_timer_manager.timer[XQC_TIMER_CONN_IDLE].expire_time, 13000000);
+    xqc_engine_destroy(engine);
+}
+
+void
+xqc_test_server_feedback_ping()
+{
+    xqc_engine_t *engine = test_create_engine();
+    const xqc_cid_t *cid = test_cid_connect(engine);
+    xqc_connection_t *conn = xqc_engine_conns_hash_find(engine, cid, 's');
+    xqc_send_ctl_t *ctl = conn->conn_initial_path->path_send_ctl;
+    conn->conn_type = XQC_CONN_TYPE_SERVER;
+    conn->conn_flag |= XQC_CONN_FLAG_HANDSHAKE_COMPLETED | XQC_CONN_FLAG_HANDSHAKE_CONFIRMED;
+    conn->conn_settings.ping_on = 1;
+    conn->last_app_data_send_time = 1000000;
+    xqc_timer_t *timer = &conn->conn_timer_manager.timer[XQC_TIMER_PING];
+    xqc_timer_unset(&conn->conn_timer_manager, XQC_TIMER_PING);
+    /* Healthy/empty server has no periodic feedback-probe traffic. */
+    timer->timeout_cb(XQC_TIMER_PING, 2000000, conn);
+    CU_ASSERT_FALSE(conn->conn_flag & XQC_CONN_FLAG_PING);
+    CU_ASSERT_TRUE(timer->timer_is_set);
+    ctl->ctl_pto_count = 3;
+    ctl->ctl_bytes_ack_eliciting_inflight[XQC_PNS_APP_DATA] = 100;
+    timer->timeout_cb(XQC_TIMER_PING, 3000000, conn);
+    CU_ASSERT_TRUE(conn->conn_flag & XQC_CONN_FLAG_PING);
+    conn->conn_flag &= ~XQC_CONN_FLAG_PING;
+    ctl->ctl_bytes_ack_eliciting_inflight[XQC_PNS_APP_DATA] = 0;
+    timer->timeout_cb(XQC_TIMER_PING, 4000000, conn);
+    CU_ASSERT_FALSE(conn->conn_flag & XQC_CONN_FLAG_PING);
+    ctl->ctl_bytes_ack_eliciting_inflight[XQC_PNS_APP_DATA] = 100;
+    conn->last_app_data_send_time = 4500000;
+    timer->timeout_cb(XQC_TIMER_PING, 5000000, conn);
+    CU_ASSERT_FALSE(conn->conn_flag & XQC_CONN_FLAG_PING);
+    /* Preserve existing client idle keepalive. */
+    conn->conn_type = XQC_CONN_TYPE_CLIENT;
+    timer->timeout_cb(XQC_TIMER_PING, 6000000, conn);
+    CU_ASSERT_TRUE(conn->conn_flag & XQC_CONN_FLAG_PING);
+    conn->conn_flag &= ~XQC_CONN_FLAG_PING;
+    conn->conn_settings.ping_on = 0;
+    xqc_timer_unset(&conn->conn_timer_manager, XQC_TIMER_PING);
+    timer->timeout_cb(XQC_TIMER_PING, 8000000, conn);
+    CU_ASSERT_FALSE(conn->conn_flag & XQC_CONN_FLAG_PING);
+    CU_ASSERT_FALSE(timer->timer_is_set);
+    xqc_engine_destroy(engine);
+}
+
+void
 xqc_test_conn_create()
 {
     xqc_engine_t *engine = test_create_engine();
