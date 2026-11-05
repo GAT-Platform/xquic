@@ -1577,6 +1577,29 @@ typedef struct {
     uint8_t complete;
 } xqc_packet_stats_v1_t;
 
+/* Local ACK-event observation. Bytes use the same encrypted ACK-eliciting
+ * packet lengths as packet_stats_v1, including retransmission copies. */
+enum {
+    XQC_DELIVERY_NO_SAMPLE = 0, XQC_DELIVERY_VALID = 1,
+    XQC_DELIVERY_INVALID_INTERVAL = 2, XQC_DELIVERY_INVALID_CLOCK = 3,
+    XQC_DELIVERY_OVERFLOW = 4, XQC_DELIVERY_INCOMPLETE = 5,
+    XQC_DELIVERY_UNSUPPORTED_PATH = 6
+};
+enum {
+    XQC_DELIVERY_APP_LIMITED = 1, XQC_DELIVERY_HANDSHAKE = 2,
+    XQC_DELIVERY_FLOW_LIMITED = 4, XQC_DELIVERY_FLOW_UNKNOWN = 8,
+    XQC_DELIVERY_SHORT_INTERVAL = 16
+};
+typedef struct {
+    uint64_t seq, path_id, ack_time_us, exported_at_us;
+    uint64_t anchor_pn, anchor_pns, newly_acked_bytes, total_acked_bytes;
+    uint64_t delivered_bytes, send_elapsed_us, ack_elapsed_us, interval_us, rate_bps;
+    uint32_t status, flags;
+} xqc_delivery_observation_v1_t;
+
+XQC_EXPORT_PUBLIC_API xqc_int_t xqc_conn_get_delivery_observation_v1(
+    xqc_engine_t *engine, const xqc_cid_t *cid, xqc_delivery_observation_v1_t *observation);
+
 XQC_EXPORT_PUBLIC_API xqc_int_t xqc_conn_get_packet_stats_v1(
     xqc_engine_t *engine, const xqc_cid_t *cid, xqc_packet_stats_v1_t *stats);
 

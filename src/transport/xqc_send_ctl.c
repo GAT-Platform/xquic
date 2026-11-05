@@ -662,10 +662,25 @@ xqc_send_ctl_on_packet_sent(xqc_send_ctl_t *send_ctl, xqc_pn_ctl_t *pn_ctl, xqc_
     }
 
     if (XQC_IS_ACK_ELICITING(packet_out->po_frame_types)) {
-        xqc_packet_accounting_sent(&send_ctl->ctl_conn->packet_accounting,
+        unsigned flags = packet_out->po_is_app_limited ? XQC_DELIVERY_APP_LIMITED : 0;
+        xqc_connection_t *conn = send_ctl->ctl_conn;
+        if (!xqc_conn_is_handshake_confirmed(conn)) flags |= XQC_DELIVERY_HANDSHAKE;
+        if (conn->conn_flag & XQC_CONN_FLAG_DATA_BLOCKED) flags |= XQC_DELIVERY_FLOW_LIMITED;
+        /* Bound local inspection cost even when applications open many streams. */
+        xqc_list_head_t *item;
+        unsigned inspected = 0;
+        xqc_list_for_each(item, &conn->conn_all_streams) {
+            if (inspected++ == 64) { flags |= XQC_DELIVERY_FLOW_UNKNOWN; break; }
+            xqc_stream_t *stream = xqc_list_entry(item, xqc_stream_t, all_stream_list);
+            if (stream->stream_flag & XQC_STREAM_FLAG_DATA_BLOCKED) {
+                flags |= XQC_DELIVERY_FLOW_LIMITED; break;
+            }
+        }
+        xqc_packet_accounting_sent_at(&send_ctl->ctl_conn->packet_accounting,
             send_ctl->ctl_path->path_id, pns, packet_out->po_pkt.pkt_num,
             packet_out->po_enc_size,
-            !!(packet_out->po_flag & (XQC_POF_LOST | XQC_POF_TLP | XQC_POF_REINJECTED_REPLICA)));
+            !!(packet_out->po_flag & (XQC_POF_LOST | XQC_POF_TLP | XQC_POF_REINJECTED_REPLICA)),
+            xqc_delivery_timestamp(), send_ctl->ctl_bytes_in_flight, flags);
     }
     send_ctl->ctl_bytes_send += packet_out->po_enc_size;
     if (packet_out->po_frame_types & (XQC_FRAME_BIT_STREAM | XQC_FRAME_BIT_DATAGRAM)) {
@@ -866,10 +881,24 @@ xqc_send_ctl_on_ack_received(xqc_send_ctl_t *send_ctl, xqc_pn_ctl_t *pn_ctl, xqc
 
     /* Read the peer's actual ranges before packet ownership cleanup. Never use
      * po_acked: that flag also propagates success from retransmission copies. */
+    xqc_packet_accounting_begin_ack(&conn->packet_accounting, send_ctl->ctl_path->path_id);
     for (unsigned i = 0; i < ack_info->n_ranges; ++i) {
         xqc_packet_accounting_ack(&conn->packet_accounting,
             send_ctl->ctl_path->path_id, pns,
             ack_info->ranges[i].low, ack_info->ranges[i].high);
+    }
+
+    xqc_packet_accounting_end_ack(&conn->packet_accounting, xqc_delivery_timestamp(),
+        (send_ctl->ctl_minrtt == UINT64_MAX || send_ctl->ctl_minrtt == 0xffffffffULL)
+            ? 0 : send_ctl->ctl_minrtt);
+    if (conn->packet_accounting.anchor_valid) {
+        const xqc_delivery_observation_v1_t *o = &conn->packet_accounting.observation;
+        xqc_log(conn->log, XQC_LOG_DEBUG,
+            "|delivery_observation|seq:%ui|path:%ui|ack_us:%ui|anchor:%ui|pns:%ui|new:%ui|total:%ui|"
+            "delivered:%ui|send_us:%ui|ack_elapsed_us:%ui|interval_us:%ui|bps:%ui|status:%ud|flags:%ud|",
+            o->seq, o->path_id, o->ack_time_us, o->anchor_pn, o->anchor_pns,
+            o->newly_acked_bytes, o->total_acked_bytes, o->delivered_bytes,
+            o->send_elapsed_us, o->ack_elapsed_us, o->interval_us, o->rate_bps, o->status, o->flags);
     }
 
     xqc_packet_number_t largest_acked_ack = xqc_ack_sent_record_on_ack(&pn_ctl->ack_sent_record[pns], ack_info);

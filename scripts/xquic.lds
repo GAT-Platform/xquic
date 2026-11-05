@@ -66,6 +66,7 @@ XQUIC_VERS_1.0 {
         xqc_conn_continue_send;
         xqc_conn_get_stats;
         xqc_conn_get_packet_stats_v1;
+        xqc_conn_get_delivery_observation_v1;
         xqc_bbr_cb;
         xqc_bbr2_cb;
         xqc_reno_cb;

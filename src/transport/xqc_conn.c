@@ -3729,6 +3729,24 @@ xqc_conn_get_packet_stats_v1(xqc_engine_t *engine, const xqc_cid_t *cid,
     return XQC_OK;
 }
 
+xqc_int_t
+xqc_conn_get_delivery_observation_v1(xqc_engine_t *engine, const xqc_cid_t *cid,
+    xqc_delivery_observation_v1_t *observation)
+{
+    if (!engine || !cid || !observation) return -XQC_EPARAM;
+    memset(observation, 0, sizeof(*observation));
+    xqc_connection_t *conn = xqc_engine_conns_hash_find(engine, cid, 's');
+    if (!conn) return -XQC_ECONN_NFOUND;
+    *observation = conn->packet_accounting.observation;
+    observation->exported_at_us = xqc_delivery_timestamp();
+    if (observation->status == XQC_DELIVERY_VALID
+        && observation->exported_at_us < observation->ack_time_us)
+        observation->status = XQC_DELIVERY_INVALID_CLOCK;
+    if (conn->packet_accounting.incomplete) observation->status = XQC_DELIVERY_INCOMPLETE;
+    else if (conn->packet_accounting.unsupported_path) observation->status = XQC_DELIVERY_UNSUPPORTED_PATH;
+    return XQC_OK;
+}
+
 xqc_conn_stats_t
 xqc_conn_get_stats(xqc_engine_t *engine, const xqc_cid_t *cid)
 {
