@@ -67,6 +67,10 @@ main()
         || !CU_add_test(pSuite, "xqc_test_conn_create", xqc_test_conn_create)
         || !CU_add_test(pSuite, "xqc_test_pq", xqc_test_pq)
         || !CU_add_test(pSuite, "xqc_test_common", xqc_test_common)
+        || !CU_add_test(pSuite, "xqc_test_pool_allocation_alignment",
+                       xqc_test_pool_allocation_alignment)
+        || !CU_add_test(pSuite, "xqc_test_pool_allocation_overflow",
+                       xqc_test_pool_allocation_overflow)
         || !CU_add_test(pSuite, "xqc_test_vint", xqc_test_vint)
         || !CU_add_test(pSuite, "xqc_test_recv_record", xqc_test_recv_record)
         || !CU_add_test(pSuite, "xqc_test_reno", xqc_test_reno)
