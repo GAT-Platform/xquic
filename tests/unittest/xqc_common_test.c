@@ -10,6 +10,42 @@
 #include "src/common/xqc_object_manager.h"
 #include "src/common/xqc_rbtree.h"
 #include "src/common/xqc_fifo.h"
+#include "src/transport/xqc_conn.h"
+
+void
+xqc_test_pool_allocation_alignment(void)
+{
+    xqc_memory_pool_t *pool = xqc_create_pool(4096);
+    CU_ASSERT_PTR_NOT_NULL_FATAL(pool);
+    size_t sizes[] = {1, 15, 16, pool->max - 1, pool->max,
+                      pool->max + 1, sizeof(xqc_connection_t), 65537};
+    for (size_t i = 0; i < sizeof(sizes) / sizeof(sizes[0]); i++) {
+        unsigned char *data = xqc_pcalloc(pool, sizes[i]);
+        CU_ASSERT_PTR_NOT_NULL_FATAL(data);
+        CU_ASSERT_EQUAL((uintptr_t) data % XQC_ALIGNMENT, 0);
+        for (size_t j = 0; j < sizes[i]; j++) {
+            CU_ASSERT_EQUAL(data[j], 0);
+        }
+        memset(data, 0xa5, sizes[i]);
+        CU_ASSERT_EQUAL(data[sizes[i] - 1], 0xa5);
+    }
+    xqc_destroy_pool(pool);
+}
+
+void
+xqc_test_pool_allocation_overflow(void)
+{
+    xqc_memory_pool_t *pool = xqc_create_pool(4096);
+    CU_ASSERT_PTR_NOT_NULL_FATAL(pool);
+    CU_ASSERT_PTR_NULL(xqc_palloc(pool, SIZE_MAX));
+    CU_ASSERT_PTR_NULL(xqc_pcalloc(pool, SIZE_MAX - 1));
+    CU_ASSERT_PTR_NULL(pool->large);
+    unsigned char *data = xqc_palloc(pool, pool->max);
+    CU_ASSERT_PTR_NOT_NULL_FATAL(data);
+    CU_ASSERT_EQUAL((uintptr_t) data % XQC_ALIGNMENT, 0);
+    memset(data, 0x5a, pool->max);
+    xqc_destroy_pool(pool);
+}
 
 
 typedef struct person_s {

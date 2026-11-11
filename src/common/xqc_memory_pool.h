@@ -189,19 +189,29 @@ xqc_destroy_pool(xqc_memory_pool_t *pool)
 #endif
 }
 
+#define XQC_ALIGNMENT (16)
+#define xqc_align_ptr(p, a) ((char *) (((uintptr_t)(p) + ((uintptr_t)a - 1)) & ~((uintptr_t)a - 1)))
+
 static inline void *
 xqc_palloc_large(xqc_memory_pool_t *pool, size_t size)
 {
+    /* data can precede the header's tail padding; align the payload itself. */
+    const size_t header_size = (sizeof(xqc_memory_large_t) + XQC_ALIGNMENT - 1)
+                              & ~((size_t) XQC_ALIGNMENT - 1);
+    if (size > SIZE_MAX - header_size) {
+        return NULL;
+    }
+
 #ifdef XQC_PROTECT_POOL_MEM
     xqc_memory_large_t *p;
     if (pool->protect_block) {
-        p = xqc_mempool_malloc_protected(size + sizeof(xqc_memory_large_t), pool->page_size);
+        p = xqc_mempool_malloc_protected(size + header_size, pool->page_size);
         
     } else {
-        p = xqc_malloc(size + sizeof(xqc_memory_large_t));
+        p = xqc_malloc(size + header_size);
     }
 #else
-    xqc_memory_large_t *p = xqc_malloc(size + sizeof(xqc_memory_large_t));
+    xqc_memory_large_t *p = xqc_malloc(size + header_size);
 #endif
 
     if (p == NULL) {
@@ -212,11 +222,8 @@ xqc_palloc_large(xqc_memory_pool_t *pool, size_t size)
     p->next = pool->large;
     pool->large = p;
 
-    return p->data;
+    return (char *) p + header_size;
 }
-
-#define XQC_ALIGNMENT (16)
-#define xqc_align_ptr(p, a) ((char *) (((uintptr_t)(p) + ((uintptr_t)a - 1)) & ~((uintptr_t)a - 1)))
 
 static inline void *
 xqc_palloc_block(xqc_memory_pool_t *pool, size_t size)
