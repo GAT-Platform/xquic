@@ -999,6 +999,9 @@ typedef struct xqc_congestion_control_callback_s {
     uint32_t (*xqc_cong_ctl_get_bandwidth_estimate)(void *cong_ctl);
 
     xqc_bbr_info_interface_t *xqc_cong_ctl_info_cb;
+    /* Validated ECN congestion, separate from packet loss/retransmission. */
+    void (*xqc_cong_ctl_on_ecn)(void *cong_ctl, xqc_usec_t largest_acked_sent_time);
+
 } xqc_cong_ctrl_callback_t;
 
 #ifdef XQC_ENABLE_RENO
@@ -2154,6 +2157,73 @@ void xqc_conn_continue_send_by_conn(xqc_connection_t *conn);
  */
 XQC_EXPORT_PUBLIC_API
 xqc_conn_stats_t xqc_conn_get_stats(xqc_engine_t *engine, const xqc_cid_t *cid);
+
+/* Optional single-path 1-RTT ECT(0) sender; passive ACK_ECN reporting is
+ * independent. Unknown/Failed states send Not-ECT. No reset/reprobe API. */
+enum { XQC_ECN_DISABLED, XQC_ECN_TESTING, XQC_ECN_UNKNOWN, XQC_ECN_CAPABLE, XQC_ECN_FAILED };
+typedef struct {
+    uint32_t struct_size, state;
+    uint64_t sent_ect0, peer_ect0, peer_ce, congestion_events;
+    uint64_t received_ect0, received_ect1, received_ce;
+} xqc_ecn_stats_t;
+XQC_EXPORT_PUBLIC_API
+xqc_int_t xqc_conn_enable_ecn(xqc_connection_t *conn);
+/* Only meaningful inside this connection's write_socket callback. */
+XQC_EXPORT_PUBLIC_API
+uint8_t xqc_conn_outgoing_ecn(xqc_connection_t *conn);
+XQC_EXPORT_PUBLIC_API
+xqc_int_t xqc_conn_get_ecn_stats(xqc_connection_t *conn, xqc_ecn_stats_t *stats);
+XQC_EXPORT_PUBLIC_API
+xqc_int_t xqc_engine_packet_process_ecn(xqc_engine_t *engine,
+    const unsigned char *packet_in_buf, size_t packet_in_size,
+    const struct sockaddr *local_addr, socklen_t local_addrlen,
+    const struct sockaddr *peer_addr, socklen_t peer_addrlen,
+    xqc_usec_t recv_time, void *user_data, uint8_t ecn);
+
+/** Optional event-loop-only observations. No payload is exposed and no QUIC
+ * scheduling state is changed. TX is emitted after socket acceptance; RX after
+ * successful parsing of a physical 1-RTT packet (not FEC reconstruction).
+ * STREAM_READ counts contiguous bytes delivered by xqc_stream_recv.
+ * The callback must not re-enter xquic or retain connection pointers.
+ */
+enum { XQC_OBSERVE_TX = 0, XQC_OBSERVE_RX = 1, XQC_OBSERVE_STREAM_READ = 2 };
+enum { XQC_OBSERVE_DATA = 1, XQC_OBSERVE_REPAIR = 2 };
+typedef void (*xqc_packet_observer_pt)(void *context, uint32_t event,
+    uint64_t path_id, uint64_t packet_number, uint64_t time_us,
+    uint64_t bytes, uint32_t flags);
+XQC_EXPORT_PUBLIC_API
+void xqc_conn_set_packet_observer(xqc_connection_t *conn,
+    xqc_packet_observer_pt observer, void *context);
+
+/** Additive FEC runtime inspection; does not enlarge existing public structs.
+ * All calls must run on the connection's owning engine thread.
+ * Pause can be selected before handshake without removing FEC advertisement.
+ * Resume requires a completed handshake and a negotiated connection-level encoder.
+ * Pausing abandons partial encoder blocks, preserves decoder state and already
+ * queued/sent packets, and stops generating new repair packets.
+ */
+typedef struct xqc_fec_runtime_stats_s {
+    uint32_t struct_size;
+    uint32_t negotiated, encoding_enabled, encoding_paused;
+    uint32_t encoder_scheme, decoder_scheme;
+    uint64_t transitions, discarded_source_symbols;
+    uint64_t repair_packets_generated, repair_packets_sent, repair_udp_bytes_sent;
+    uint64_t protected_packets_sent, recovered_packets;
+    /* Decoded QUIC payload, not unique application bytes or playout success. */
+    uint64_t recovered_bytes, repair_wait_us, received_repair_packets;
+} xqc_fec_runtime_stats_t;
+
+XQC_EXPORT_PUBLIC_API
+xqc_int_t xqc_conn_pause_fec_encoding(xqc_connection_t *conn, int paused);
+/* Short-lived pacing ceiling for a loss experiment, bytes/s; zero clears it.
+ * Never changes the congestion window or bypasses ordinary QUIC recovery. */
+XQC_EXPORT_PUBLIC_API
+xqc_int_t xqc_conn_set_probe_pacing(xqc_connection_t *conn, uint64_t bytes_per_second,
+                                   uint64_t ttl_us);
+
+XQC_EXPORT_PUBLIC_API
+xqc_int_t xqc_conn_get_fec_runtime_stats(xqc_connection_t *conn,
+                                        xqc_fec_runtime_stats_t *stats);
 
 
 /**

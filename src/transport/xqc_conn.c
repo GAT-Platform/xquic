@@ -2607,8 +2607,11 @@ xqc_send_packet_with_pn(xqc_connection_t *conn, xqc_path_ctx_t *path, xqc_packet
     xqc_usec_t now = xqc_monotonic_timestamp();
     packet_out->po_sent_time = now;
 
-    /* send data */
+    /* This metadata is scoped to the synchronous socket callback. */
+    packet_out->po_ecn = xqc_conn_select_ecn(conn, path, packet_out, now);
+    conn->ecn_outgoing = packet_out->po_ecn;
     ssize_t sent = xqc_send(conn, path, conn->enc_pkt, conn->enc_pkt_len);
+    conn->ecn_outgoing = 0;
     if (sent != conn->enc_pkt_len) {
         xqc_log(conn->log, XQC_LOG_ERROR,
                 "|write_socket error|conn:%p|path:%ui|pkt_num:%ui|size:%ud|sent:%z|pkt_type:%s|frame:%s|now:%ui|",
@@ -3706,6 +3709,164 @@ xqc_conn_get_stats_internal(xqc_connection_t *conn, xqc_conn_stats_t *conn_stats
     xqc_extern_conn_info_print(conn, conn_stats);
 }
 
+xqc_int_t
+xqc_conn_enable_ecn(xqc_connection_t *conn)
+{
+    if (!conn) return -XQC_EPARAM;
+    if (conn->conn_state >= XQC_CONN_STATE_CLOSING) return -XQC_ESTATE;
+    /* Active validation currently covers one path and individual socket sends. */
+    if (conn->conn_settings.enable_multipath || xqc_engine_is_sendmmsg_on(conn->engine, conn))
+        return -XQC_EPARAM;
+    if (conn->ecn_state == XQC_ECN_DISABLED) conn->ecn_state = XQC_ECN_TESTING;
+    return XQC_OK;
+}
+
+uint8_t
+xqc_conn_outgoing_ecn(xqc_connection_t *conn)
+{
+    return conn ? conn->ecn_outgoing : 0;
+}
+
+xqc_int_t
+xqc_conn_get_ecn_stats(xqc_connection_t *conn, xqc_ecn_stats_t *stats)
+{
+    if (!conn || !stats || stats->struct_size < sizeof(*stats)) return -XQC_EPARAM;
+    memset(stats, 0, sizeof(*stats)); stats->struct_size = sizeof(*stats);
+    stats->state = conn->ecn_state; stats->sent_ect0 = conn->ecn_sent_ect0;
+    stats->peer_ect0 = conn->ecn_peer[0]; stats->peer_ce = conn->ecn_peer[2];
+    stats->congestion_events = conn->ecn_events;
+    for (unsigned i = 0; i < XQC_PNS_N; ++i) {
+        stats->received_ect0 += conn->ecn_rx[i][0];
+        stats->received_ect1 += conn->ecn_rx[i][1];
+        stats->received_ce += conn->ecn_rx[i][2];
+    }
+    return XQC_OK;
+}
+
+uint8_t
+xqc_conn_select_ecn(xqc_connection_t *conn, xqc_path_ctx_t *path,
+    xqc_packet_out_t *packet_out, xqc_usec_t now)
+{
+    if (conn->ecn_state == XQC_ECN_DISABLED || conn->ecn_state == XQC_ECN_FAILED) return 0;
+    if (path->path_id || conn->conn_settings.enable_multipath) {
+        conn->ecn_state = XQC_ECN_FAILED; return 0;
+    }
+    if (packet_out->po_pkt.pkt_type != XQC_PTYPE_SHORT_HEADER ||
+        !(conn->conn_flag & XQC_CONN_FLAG_HANDSHAKE_COMPLETED) ||
+        !XQC_IS_ACK_ELICITING(packet_out->po_frame_types)) return 0;
+    /* A validated route can start blackholing ECN after a path change.
+     * Bound marking during an ACK outage even in CAPABLE; retransmissions
+     * must eventually try Not-ECT. This is fallback, not a loss diagnosis. */
+    if (path->path_send_ctl->ctl_pto_count >= 3) {
+        conn->ecn_state = XQC_ECN_FAILED; return 0;
+    }
+    if (conn->ecn_state == XQC_ECN_TESTING && conn->ecn_testing_started &&
+        (conn->ecn_sent_ect0 >= 10 || now-conn->ecn_testing_started >= 3*xqc_send_ctl_calc_pto(path->path_send_ctl)))
+        conn->ecn_state = XQC_ECN_UNKNOWN;
+    return conn->ecn_state == XQC_ECN_TESTING || conn->ecn_state == XQC_ECN_CAPABLE ? 2 : 0;
+}
+
+xqc_int_t
+xqc_conn_set_probe_pacing(xqc_connection_t *conn, uint64_t rate, uint64_t ttl_us)
+{
+    if (!conn || rate > 125000000000ULL || (rate && (!ttl_us || ttl_us > 1000000)))
+        return -XQC_EPARAM;
+    if (conn->conn_state >= XQC_CONN_STATE_CLOSING || !conn->conn_initial_path)
+        return -XQC_ESTATE;
+    const uint64_t previous_rate = conn->probe_pacing_rate;
+    const xqc_usec_t now = xqc_monotonic_timestamp();
+    const int was_live = conn->probe_pacing_expires > now;
+    conn->probe_pacing_rate = rate;
+    conn->probe_pacing_expires = rate ? now + ttl_us : 0;
+    if (rate == previous_rate && (!rate || was_live)) return XQC_OK;
+    xqc_list_head_t *pos;
+    xqc_list_for_each(pos, &conn->conn_paths_list) {
+        xqc_path_ctx_t *path = xqc_list_entry(pos, xqc_path_ctx_t, path_list);
+        xqc_send_ctl_t *ctl = path->path_send_ctl;
+        if (!ctl) continue;
+        if (rate) ctl->ctl_pacing.bytes_budget = xqc_min(ctl->ctl_pacing.bytes_budget, 2 * XQC_MSS);
+        ctl->ctl_pacing.pending_budget = 0;
+        ctl->ctl_pacing.last_sent_time = now;
+        if (xqc_timer_is_set(&ctl->path_timer_manager, XQC_TIMER_PACING))
+            xqc_timer_update(&ctl->path_timer_manager, XQC_TIMER_PACING, now, 1);
+    }
+    /* Re-evaluate a pending pacing timer without recursively entering send. */
+    xqc_engine_remove_wakeup_queue(conn->engine, conn);
+    xqc_engine_add_active_queue(conn->engine, conn);
+    xqc_engine_wakeup_once(conn->engine);
+    return XQC_OK;
+}
+
+xqc_int_t
+xqc_conn_pause_fec_encoding(xqc_connection_t *conn, int paused)
+{
+    if (conn == NULL || (paused != 0 && paused != 1)) return -XQC_EPARAM;
+#ifdef XQC_ENABLE_FEC
+    if (!conn->fec_ctl || !conn->conn_settings.enable_encode_fec ||
+        conn->conn_settings.fec_level != XQC_FEC_CONN_LEVEL) return -XQC_EFEC_NOT_SUPPORT_FEC;
+    if (!paused && (!(conn->conn_flag & XQC_CONN_FLAG_HANDSHAKE_COMPLETED) ||
+                    !conn->conn_settings.fec_params.fec_encoder_scheme)) return -XQC_ESTATE;
+    if (conn->conn_state >= XQC_CONN_STATE_CLOSING) return -XQC_ESTATE;
+    if (conn->fec_encoding_paused == paused) return XQC_OK;
+    conn->fec_encoding_paused = paused;
+    conn->fec_runtime_transitions++;
+    if (paused) {
+        xqc_timer_unset(&conn->conn_timer_manager, XQC_TIMER_QUEUE_FIN);
+        for (uint8_t mode = 0; mode < XQC_BLOCK_MODE_LEN; ++mode) {
+            if (mode == XQC_SLIM_SIZE_REQ || !conn->fec_ctl->fec_send_symbol_num[mode]) continue;
+            conn->fec_discarded_source_symbols += conn->fec_ctl->fec_send_symbol_num[mode];
+            // This advances the block identity, preventing symbols from before
+            // and after the pause from being interpreted as the same block.
+            xqc_fec_ctl_init_send_params(conn, mode);
+        }
+    }
+    return XQC_OK;
+#else
+    return -XQC_EFEC_NOT_SUPPORT_FEC;
+#endif
+}
+
+void
+xqc_conn_set_packet_observer(xqc_connection_t *conn,
+    xqc_packet_observer_pt observer, void *context)
+{
+    if (conn) {
+        conn->packet_observer = observer;
+        conn->packet_observer_context = context;
+    }
+}
+
+xqc_int_t
+xqc_conn_get_fec_runtime_stats(xqc_connection_t *conn, xqc_fec_runtime_stats_t *stats)
+{
+    if (!conn || !stats || stats->struct_size < sizeof(*stats)) return -XQC_EPARAM;
+    memset(stats, 0, sizeof(*stats));
+    stats->struct_size = sizeof(*stats);
+#ifdef XQC_ENABLE_FEC
+    stats->negotiated = conn->fec_ctl && conn->conn_settings.enable_encode_fec &&
+        conn->conn_settings.fec_params.fec_encoder_scheme &&
+        (conn->conn_flag & XQC_CONN_FLAG_HANDSHAKE_COMPLETED) &&
+        conn->conn_settings.fec_level == XQC_FEC_CONN_LEVEL;
+    stats->encoding_paused = conn->fec_encoding_paused;
+    stats->encoding_enabled = stats->negotiated && !stats->encoding_paused;
+    stats->encoder_scheme = conn->conn_settings.fec_params.fec_encoder_scheme;
+    stats->decoder_scheme = conn->conn_settings.fec_params.fec_decoder_scheme;
+    stats->transitions = conn->fec_runtime_transitions;
+    stats->discarded_source_symbols = conn->fec_discarded_source_symbols;
+    stats->repair_packets_sent = conn->fec_repair_packets_sent;
+    stats->repair_udp_bytes_sent = conn->fec_repair_udp_bytes_sent;
+    stats->protected_packets_sent = conn->fec_protected_packets_sent;
+    if (conn->fec_ctl) {
+        stats->repair_packets_generated = conn->fec_ctl->fec_send_repair_num_total;
+        stats->recovered_packets = conn->fec_recovered_packets;
+        stats->recovered_bytes = conn->fec_recovered_bytes;
+        stats->repair_wait_us = conn->fec_repair_wait_us;
+        stats->received_repair_packets = conn->fec_received_repair_packets;
+    }
+#endif
+    return XQC_OK;
+}
+
 xqc_conn_stats_t
 xqc_conn_get_stats(xqc_engine_t *engine, const xqc_cid_t *cid)
 {
@@ -4227,6 +4388,7 @@ xqc_conn_buff_undecrypt_packet_in(xqc_packet_in_t *packet_in,
     new_packet->pos = (unsigned char *)new_packet->buf + (packet_in->pos - packet_in->buf);
     new_packet->last = (unsigned char *)new_packet->buf + (packet_in->last - packet_in->buf);
     new_packet->pkt_recv_time = packet_in->pkt_recv_time;
+    new_packet->pi_ecn = packet_in->pi_ecn;
 
     xqc_list_add_tail(&new_packet->pi_list, &conn->undecrypt_packet_in[encrypt_level]);
     conn->undecrypt_count[encrypt_level]++;
@@ -4253,7 +4415,7 @@ xqc_conn_process_undecrypt_packet_in(xqc_connection_t *conn, xqc_encrypt_level_t
         xqc_log_event(conn->log, TRA_DATAGRAMS_RECEIVED, packet_in->buf_size, packet_in->pi_path_id);
         xqc_log(conn->log, XQC_LOG_DEBUG, "|delay|undecrypt_count:%ud|encrypt_level:%d|",
                 conn->undecrypt_count[encrypt_level], encrypt_level);
-        ret = xqc_conn_process_packet(conn, packet_in->buf, packet_in->buf_size, packet_in->pkt_recv_time);       
+        ret = xqc_conn_process_packet_ecn(conn, packet_in->buf, packet_in->buf_size, packet_in->pkt_recv_time, packet_in->pi_ecn);       
         if (ret) {
             xqc_log(conn->log, XQC_LOG_ERROR, "|xqc_packet_process error|ret:%d|", ret);
             return ret;
@@ -4507,6 +4669,10 @@ xqc_conn_record_single(xqc_connection_t *c, xqc_packet_in_t *packet_in)
 
     range_status = xqc_recv_record_add(&pn_ctl->ctl_recv_record[pns], pkt_num);
     if (range_status == XQC_PKTRANGE_OK) {
+        if (packet_in->pi_ecn && !packet_in->pi_path_id && !(packet_in->pi_flag & XQC_PIF_FEC_RECOVERED)) {
+            const unsigned index = packet_in->pi_ecn == 2 ? 0 : packet_in->pi_ecn == 1 ? 1 : 2;
+            ++c->ecn_rx[pns][index];
+        }
         if (XQC_IS_ACK_ELICITING(packet_in->pi_frame_types)) {
             ++send_ctl->ctl_ack_eliciting_pkt[pns];
 
@@ -4737,6 +4903,17 @@ xqc_conn_on_pkt_processed(xqc_connection_t *c, xqc_packet_in_t *pi, xqc_usec_t n
 
     /* record packet */
     xqc_conn_record_single(c, pi);
+    if (c->packet_observer && pi->pi_pkt.pkt_type == XQC_PTYPE_SHORT_HEADER
+        && !(pi->pi_flag & XQC_PIF_FEC_RECOVERED))
+    {
+        uint32_t flags = (pi->pi_frame_types & (XQC_FRAME_BIT_STREAM | XQC_FRAME_BIT_DATAGRAM))
+            ? XQC_OBSERVE_DATA : 0;
+#ifdef XQC_ENABLE_FEC
+        if (pi->pi_frame_types & XQC_FRAME_BIT_REPAIR_SYMBOL) flags |= XQC_OBSERVE_REPAIR;
+#endif
+        c->packet_observer(c->packet_observer_context, XQC_OBSERVE_RX,
+            pi->pi_path_id, pi->pi_pkt.pkt_num, now, pi->buf_size, flags);
+    }
     if (pi->pi_frame_types & (~(XQC_FRAME_BIT_STREAM|XQC_FRAME_BIT_DATAGRAM|XQC_FRAME_BIT_PADDING|XQC_FRAME_BIT_SID|XQC_FRAME_BIT_REPAIR_SYMBOL))) {
         c->conn_flag |= XQC_CONN_FLAG_NEED_RUN;
     }
@@ -4788,6 +4965,14 @@ xqc_conn_process_packet(xqc_connection_t *c,
     const unsigned char *packet_in_buf, size_t packet_in_size, 
     xqc_usec_t recv_time)
 {
+    return xqc_conn_process_packet_ecn(c, packet_in_buf, packet_in_size, recv_time, 0);
+}
+
+xqc_int_t
+xqc_conn_process_packet_ecn(xqc_connection_t *c,
+    const unsigned char *packet_in_buf, size_t packet_in_size,
+    xqc_usec_t recv_time, uint8_t ecn)
+{
     xqc_int_t ret = XQC_OK;
     const unsigned char *last_pos = NULL;
     const unsigned char *pos = packet_in_buf;                   /* start of QUIC pkt */
@@ -4803,6 +4988,7 @@ xqc_conn_process_packet(xqc_connection_t *c,
         xqc_packet_in_t *packet_in = &packet;
         memset(packet_in, 0, sizeof(*packet_in));
         xqc_packet_in_init(packet_in, pos, end - pos, decrypt_payload, XQC_MAX_PACKET_IN_LEN, recv_time);
+        packet_in->pi_ecn = ecn & 3;
 
         packet_in->pi_path_id = XQC_UNKNOWN_PATH_ID;
 

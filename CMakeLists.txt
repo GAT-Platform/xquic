@@ -422,6 +422,7 @@ if(PLATFORM MATCHES "mac")
         -lstdc++
     )
 else()
+    set_property(TARGET xquic APPEND PROPERTY LINK_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/scripts/xquic.lds")
     target_link_libraries(
         xquic
         "-ldl -Wl,--whole-archive -Wl,--version-script=${CMAKE_CURRENT_SOURCE_DIR}/scripts/xquic.lds"

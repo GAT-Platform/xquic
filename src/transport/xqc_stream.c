@@ -1453,6 +1453,10 @@ xqc_stream_recv(xqc_stream_t *stream, unsigned char *recv_buf, size_t recv_buf_s
     }
 
     stream->stream_conn->conn_flow_ctl.fc_data_read += read;
+    if (read > 0 && stream->stream_conn->packet_observer) {
+        stream->stream_conn->packet_observer(stream->stream_conn->packet_observer_context,
+            XQC_OBSERVE_STREAM_READ, 0, 0, xqc_monotonic_timestamp(), read, 0);
+    }
 
     xqc_log_event(stream->stream_conn->log, TRA_STREAM_DATA_MOVED, stream, 1, read,
                   recv_buf_size, *fin, 0, 0, 0, 0);

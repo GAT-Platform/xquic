@@ -191,6 +191,9 @@ void xqc_send_ctl_on_dgram_dropped(xqc_connection_t *conn, xqc_packet_out_t *po)
 
 int xqc_send_ctl_may_remove_unacked_dgram(xqc_connection_t *conn, xqc_packet_out_t *po);
 
+void xqc_send_ctl_validate_ecn(xqc_send_ctl_t *ctl, const xqc_ack_info_t *ack,
+    uint64_t newly_acked_ect0, xqc_usec_t largest_marked_sent_time);
+
 int xqc_send_ctl_indirectly_ack_or_drop_po(xqc_connection_t *conn, xqc_packet_out_t *po);
 
 xqc_send_ctl_t *xqc_send_ctl_create(xqc_path_ctx_t *path);

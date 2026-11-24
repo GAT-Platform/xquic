@@ -330,7 +330,7 @@ xqc_send_repair_packets(xqc_connection_t *conn, xqc_fec_schemes_e scheme, xqc_li
 xqc_int_t
 xqc_is_packet_fec_protected(xqc_connection_t *conn, xqc_packet_out_t *packet_out)
 {
-    if (packet_out->po_flag & XQC_POF_USE_FEC
+    if (!conn->fec_encoding_paused && packet_out->po_flag & XQC_POF_USE_FEC
         && packet_out->po_frame_types & conn->conn_settings.fec_params.fec_protected_frames)
     {
         return XQC_OK;
@@ -376,6 +376,7 @@ xqc_process_fec_protected_packet(xqc_connection_t *conn, xqc_packet_out_t *packe
     xqc_fec_schemes_e encoder_scheme;
     unsigned char  *p;
 
+    if (conn->fec_encoding_paused) return XQC_OK;
     header_len = packet_out->po_payload - packet_out->po_buf;
     payload_len = packet_out->po_used_size - header_len;
     fec_bm_mode = packet_out->po_stream_fec_blk_mode;

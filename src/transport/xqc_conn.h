@@ -459,9 +459,32 @@ struct xqc_connection_s {
     uint32_t                        cli_bidi_streams;
     uint32_t                        svr_bidi_streams;
 
+    xqc_packet_observer_pt          packet_observer;
+    void                           *packet_observer_context;
+
     /* for fec */
     xqc_fec_ctl_t                  *fec_ctl;
     uint32_t                        fec_neg_fail_reason;
+    /* Runtime pause never changes the negotiated transport parameters. */
+    xqc_bool_t                      fec_encoding_paused;
+    uint64_t                        fec_runtime_transitions;
+    uint64_t                        fec_discarded_source_symbols;
+    uint64_t                        fec_repair_packets_sent;
+    uint64_t                        fec_repair_udp_bytes_sent;
+    uint64_t                        fec_protected_packets_sent;
+    uint64_t                        fec_recovered_packets;
+    uint64_t                        fec_recovered_bytes;
+    uint64_t                        fec_repair_wait_us;
+    uint64_t                        fec_received_repair_packets;
+    uint64_t                        probe_pacing_rate;
+    xqc_usec_t                      probe_pacing_expires;
+    /* Physical authenticated packet counts, independently per PN space. */
+    uint64_t                        ecn_rx[XQC_PNS_N][3];
+    uint64_t                        ecn_sent_ect0, ecn_peer[3], ecn_events;
+    xqc_packet_number_t             ecn_largest_ack;
+    xqc_usec_t                      ecn_testing_started;
+    uint8_t                         ecn_state, ecn_outgoing, ecn_have_ack;
+
 
 
     /* receved pkts stats */
@@ -595,6 +618,13 @@ xqc_conn_has_undecrypt_packets(xqc_connection_t *conn)
         || conn->undecrypt_count[XQC_ENC_LEV_0RTT]
         || conn->undecrypt_count[XQC_ENC_LEV_HSK];
 }
+
+void xqc_conn_record_single(xqc_connection_t *c, xqc_packet_in_t *packet_in);
+
+uint8_t xqc_conn_select_ecn(xqc_connection_t *conn, xqc_path_ctx_t *path,
+    xqc_packet_out_t *packet_out, xqc_usec_t now);
+xqc_int_t xqc_conn_process_packet_ecn(xqc_connection_t *c, const unsigned char *packet_in_buf,
+    size_t packet_in_size, xqc_usec_t recv_time, uint8_t ecn);
 
 /* process an UDP datagram */
 xqc_int_t xqc_conn_process_packet(xqc_connection_t *c, const unsigned char *packet_in_buf,

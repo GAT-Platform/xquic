@@ -250,7 +250,7 @@ xqc_timer_fec_conn_queue_rpr_timeout(xqc_timer_type_t type, xqc_usec_t now, void
     encoder_scheme = conn->conn_settings.fec_params.fec_encoder_scheme;
     head = &conn->conn_send_queue->sndq_send_packets;
     /* if connection sendq has no fec protected packet, try to send repair packets in ahead */
-    if (conn->conn_settings.enable_encode_fec
+    if (conn->conn_settings.enable_encode_fec && !conn->fec_encoding_paused
         && encoder_scheme == XQC_PACKET_MASK_CODE)
     {
         for (fec_bm_mode = 0; fec_bm_mode < XQC_BLOCK_MODE_LEN; fec_bm_mode++) {

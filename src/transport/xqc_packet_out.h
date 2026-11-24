@@ -78,6 +78,7 @@ typedef struct xqc_packet_out_s {
     unsigned int            po_enc_size;        /* size of po after being encrypted */
     unsigned int            po_ack_offset;
     xqc_packet_out_flag_t   po_flag;
+    uint8_t                po_ecn;
     /* Largest Acknowledged in ACK frame, initiated to be 0 */
     xqc_packet_number_t     po_largest_ack;
     xqc_usec_t              po_sent_time;
