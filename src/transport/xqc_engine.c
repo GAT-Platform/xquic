@@ -1102,6 +1102,17 @@ xqc_engine_packet_process(xqc_engine_t *engine,
     const struct sockaddr *peer_addr, socklen_t peer_addrlen,
     xqc_usec_t recv_time, void *user_data)
 {
+    return xqc_engine_packet_process_ecn(engine, packet_in_buf, packet_in_size,
+        local_addr, local_addrlen, peer_addr, peer_addrlen, recv_time, user_data, 0);
+}
+
+xqc_int_t
+xqc_engine_packet_process_ecn(xqc_engine_t *engine,
+    const unsigned char *packet_in_buf, size_t packet_in_size,
+    const struct sockaddr *local_addr, socklen_t local_addrlen,
+    const struct sockaddr *peer_addr, socklen_t peer_addrlen,
+    xqc_usec_t recv_time, void *user_data, uint8_t ecn)
+{
     xqc_int_t ret;
     xqc_connection_t *conn = NULL;
     xqc_cid_t dcid, scid;   /* dcid: cid of peer; scid: cid of endpoint */
@@ -1246,7 +1257,7 @@ process:
     }
 
     /* process packets */
-    ret = xqc_conn_process_packet(conn, packet_in_buf, packet_in_size, recv_time);
+    ret = xqc_conn_process_packet_ecn(conn, packet_in_buf, packet_in_size, recv_time, ecn & 3);
 
     conn->rcv_pkt_stats.conn_udp_pkts++;
 

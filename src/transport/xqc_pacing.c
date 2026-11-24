@@ -15,6 +15,13 @@
 #define XQC_PACING_DELAY_US XQC_CLOCK_GRANULARITY_US
 #define XQC_DEFAULT_PACING_RATE(init_rtt) (((2 * XQC_MSS * 1000000ULL)/(init_rtt)))
 
+static uint64_t
+xqc_probe_pacing_limit(xqc_pacing_t *pacing)
+{
+    xqc_connection_t *conn = pacing->ctl_ctx->ctl_conn;
+    return conn->probe_pacing_rate && conn->probe_pacing_expires > xqc_monotonic_timestamp() ? conn->probe_pacing_rate : 0;
+}
+
 void
 xqc_pacing_init(xqc_pacing_t *pacing, int pacing_on, xqc_send_ctl_t *send_ctl)
 {
@@ -38,7 +45,8 @@ xqc_pacing_rate_calc(xqc_pacing_t *pacing)
     if (send_ctl->ctl_cong_callback->xqc_cong_ctl_get_pacing_rate) {
         pacing_rate = send_ctl->ctl_cong_callback->
                       xqc_cong_ctl_get_pacing_rate(send_ctl->ctl_cong);
-        return pacing_rate;
+        const uint64_t limit = xqc_probe_pacing_limit(pacing);
+        return limit ? xqc_min(pacing_rate, limit) : pacing_rate;
     }
 
     cwnd = send_ctl->ctl_cong_callback->xqc_cong_ctl_get_cwnd(send_ctl->ctl_cong);
@@ -65,7 +73,8 @@ xqc_pacing_rate_calc(xqc_pacing_t *pacing)
         pacing_rate = pacing_rate * 12 / 10;
     }
 
-    return pacing_rate;
+    const uint64_t limit = xqc_probe_pacing_limit(pacing);
+    return limit ? xqc_min(pacing_rate, limit) : pacing_rate;
 }
 
 static uint32_t 
@@ -74,6 +83,7 @@ xqc_pacing_max_burst_size(xqc_pacing_t *pacing)
     xqc_usec_t t_diff = (XQC_PACING_DELAY_US + XQC_CLOCK_GRANULARITY_US);
     uint64_t max_burst_bytes = t_diff * xqc_pacing_rate_calc(pacing) 
                                 / 1000000;
+    if (xqc_probe_pacing_limit(pacing)) return XQC_MIN_BURST_NUM;
     return xqc_max(XQC_MAX_BURST_NUM, max_burst_bytes);
 }
 
@@ -98,6 +108,8 @@ xqc_pacing_on_timeout(xqc_pacing_t *pacing)
     xqc_usec_t now = xqc_monotonic_timestamp();
     uint32_t budget = xqc_pacing_calc_budget(pacing, now);
     pacing->bytes_budget = xqc_max(budget, pacing->bytes_budget + pacing->pending_budget);
+    if (xqc_probe_pacing_limit(pacing))
+        pacing->bytes_budget = xqc_min(pacing->bytes_budget, XQC_MIN_BURST_NUM);
     pacing->pending_budget = 0;
     pacing->last_sent_time = now;
 }
@@ -126,6 +138,11 @@ xqc_pacing_time_until_send(xqc_pacing_t *pacing, uint32_t bytes)
     xqc_usec_t delay_us;
     delay_us = (uint64_t)(bytes - pacing->bytes_budget) * 1000000 
             / xqc_pacing_rate_calc(pacing);
+    if (xqc_probe_pacing_limit(pacing)) {
+        const xqc_usec_t now = xqc_monotonic_timestamp();
+        const xqc_usec_t expires = pacing->ctl_ctx->ctl_conn->probe_pacing_expires;
+        if (expires > now) delay_us = xqc_min(delay_us, expires - now);
+    }
     delay_us = xqc_max(delay_us, XQC_PACING_DELAY_US);
     pacing->pending_budget = bytes - pacing->bytes_budget;
     return delay_us;
@@ -155,8 +172,12 @@ xqc_pacing_can_write(xqc_pacing_t *pacing, uint32_t total_bytes)
 
 void
 xqc_pacing_on_app_limit(xqc_pacing_t *pacing) {
-    pacing->bytes_budget = XQC_MAX_BURST_NUM;
-    pacing->last_sent_time = xqc_monotonic_timestamp();
+    const xqc_usec_t now = xqc_monotonic_timestamp();
+    /* An idle application must not refill a free burst for every small record.
+     * Preserve time-earned credit while a probe ceiling is active. */
+    pacing->bytes_budget = xqc_probe_pacing_limit(pacing) ?
+        xqc_pacing_calc_budget(pacing, now) : XQC_MAX_BURST_NUM;
+    pacing->last_sent_time = now;
 }
 
 int

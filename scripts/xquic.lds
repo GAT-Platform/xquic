@@ -65,6 +65,14 @@ XQUIC_VERS_1.0 {
         xqc_engine_config_get_cid_len;
         xqc_conn_continue_send;
         xqc_conn_get_stats;
+        xqc_conn_pause_fec_encoding;
+        xqc_conn_set_probe_pacing;
+        xqc_conn_enable_ecn;
+        xqc_conn_outgoing_ecn;
+        xqc_conn_get_ecn_stats;
+        xqc_engine_packet_process_ecn;
+        xqc_conn_get_fec_runtime_stats;
+    xqc_conn_set_packet_observer;
         xqc_bbr_cb;
         xqc_bbr2_cb;
         xqc_reno_cb;

@@ -627,6 +627,33 @@ xqc_send_ctl_on_packet_sent(xqc_send_ctl_t *send_ctl, xqc_pn_ctl_t *pn_ctl, xqc_
 {
     xqc_pkt_num_space_t pns = packet_out->po_pkt.pkt_pns;
 
+#ifdef XQC_ENABLE_FEC
+    // Both single-send and successful sendmmsg paths reach this hook only after
+    // socket acceptance. Include retransmissions; bytes are UDP payload, no IP/UDP headers.
+    if (packet_out->po_frame_types & XQC_FRAME_BIT_REPAIR_SYMBOL) {
+        send_ctl->ctl_conn->fec_repair_packets_sent++;
+        send_ctl->ctl_conn->fec_repair_udp_bytes_sent += packet_out->po_enc_size;
+    }
+    if (packet_out->po_frame_types & XQC_FRAME_BIT_SID) {
+        send_ctl->ctl_conn->fec_protected_packets_sent++;
+    }
+#endif
+    if (packet_out->po_ecn == 2) {
+        ++send_ctl->ctl_conn->ecn_sent_ect0;
+        if (!send_ctl->ctl_conn->ecn_testing_started) send_ctl->ctl_conn->ecn_testing_started = now;
+    }
+    if (send_ctl->ctl_conn->packet_observer
+        && packet_out->po_pkt.pkt_type == XQC_PTYPE_SHORT_HEADER)
+    {
+        uint32_t flags = (packet_out->po_frame_types & (XQC_FRAME_BIT_STREAM | XQC_FRAME_BIT_DATAGRAM))
+            ? XQC_OBSERVE_DATA : 0;
+#ifdef XQC_ENABLE_FEC
+        if (packet_out->po_frame_types & XQC_FRAME_BIT_REPAIR_SYMBOL) flags |= XQC_OBSERVE_REPAIR;
+#endif
+        send_ctl->ctl_conn->packet_observer(send_ctl->ctl_conn->packet_observer_context,
+            XQC_OBSERVE_TX, send_ctl->ctl_path->path_id, packet_out->po_pkt.pkt_num,
+            now, packet_out->po_enc_size, flags);
+    }
     xqc_sample_on_sent(packet_out, send_ctl, now);
 
     xqc_packet_number_t orig_pktnum = packet_out->po_origin ? packet_out->po_origin->po_pkt.pkt_num : 0;
@@ -834,6 +861,41 @@ xqc_send_ctl_detect_optimistic_ack_attack(xqc_send_ctl_t *send_ctl,
 /**
  * OnAckReceived
  */
+/* RFC 9000 13.4.2: an old/reordered ACK cannot fail validation. Counts
+ * can exceed newly ACKed marks (lost ACK frames), but cannot exceed all sends.
+ * The active sender marks only ECT(0) packets in application PN space. */
+void
+xqc_send_ctl_validate_ecn(xqc_send_ctl_t *ctl, const xqc_ack_info_t *ack,
+    uint64_t newly_acked_ect0, xqc_usec_t largest_marked_sent_time)
+{
+    xqc_connection_t *conn = ctl->ctl_conn;
+    if (conn->ecn_state == XQC_ECN_DISABLED || conn->ecn_state == XQC_ECN_FAILED ||
+        ack->pns != XQC_PNS_APP_DATA || ctl->ctl_path->path_id ||
+        (conn->ecn_have_ack && ack->ranges[0].high <= conn->ecn_largest_ack)) return;
+    conn->ecn_have_ack = 1; conn->ecn_largest_ack = ack->ranges[0].high;
+    if (!ack->has_ecn) {
+        if (newly_acked_ect0) conn->ecn_state = XQC_ECN_FAILED;
+        return;
+    }
+    if (ack->ecn[0] < conn->ecn_peer[0] || ack->ecn[2] < conn->ecn_peer[2] ||
+        ack->ecn[1] || ack->ecn[0]+ack->ecn[2] > conn->ecn_sent_ect0 ||
+        ack->ecn[0]-conn->ecn_peer[0]+ack->ecn[2]-conn->ecn_peer[2] < newly_acked_ect0) {
+        conn->ecn_state = XQC_ECN_FAILED; return;
+    }
+    const uint64_t ce_delta = ack->ecn[2]-conn->ecn_peer[2];
+    memcpy(conn->ecn_peer, ack->ecn, sizeof(conn->ecn_peer));
+    if (newly_acked_ect0) conn->ecn_state = XQC_ECN_CAPABLE;
+    if (ce_delta && conn->ecn_state == XQC_ECN_CAPABLE) {
+        ++conn->ecn_events;
+        const xqc_usec_t sent_at = largest_marked_sent_time ? largest_marked_sent_time :
+            ctl->ctl_largest_acked_sent_time[XQC_PNS_APP_DATA];
+        if (ctl->ctl_cong_callback->xqc_cong_ctl_on_ecn)
+            ctl->ctl_cong_callback->xqc_cong_ctl_on_ecn(ctl->ctl_cong, sent_at);
+        else if (ctl->ctl_cong_callback->xqc_cong_ctl_on_lost)
+            ctl->ctl_cong_callback->xqc_cong_ctl_on_lost(ctl->ctl_cong, sent_at);
+    }
+}
+
 int
 xqc_send_ctl_on_ack_received(xqc_send_ctl_t *send_ctl, xqc_pn_ctl_t *pn_ctl, xqc_send_queue_t *send_queue, xqc_ack_info_t *const ack_info, xqc_usec_t ack_recv_time, xqc_bool_t ack_on_same_path)
 {
@@ -846,6 +908,8 @@ xqc_send_ctl_on_ack_received(xqc_send_ctl_t *send_ctl, xqc_pn_ctl_t *pn_ctl, xqc
 
     /* 标记ack info里是否有这条路径发出的包 */
     unsigned char has_acked = 0, update_largest_ack = 0, ignore_rtt = 0;
+    uint64_t newly_acked_ect0 = 0;
+    xqc_usec_t largest_marked_sent_time = 0;
     unsigned char has_ack_eliciting = 0, spurious_loss_detected = 0;
     xqc_packet_number_t frame_largest_ack = ack_info->ranges[0].high;
     xqc_packet_number_t spurious_loss_pktnum = 0;
@@ -896,6 +960,14 @@ xqc_send_ctl_on_ack_received(xqc_send_ctl_t *send_ctl, xqc_pn_ctl_t *pn_ctl, xqc
 
         if (packet_out->po_pkt.pkt_num >= range->low) {
             // this packet is acked
+            if (packet_out->po_ecn == 2) {
+                ++newly_acked_ect0;
+                largest_marked_sent_time = xqc_max(largest_marked_sent_time, packet_out->po_sent_time);
+                /* An ACKed original can remain queued while a retransmission
+                 * still references it. Consume the physical ECN mark once;
+                 * each actual new send assigns its own mark before socket IO. */
+                packet_out->po_ecn = 0;
+            }
 
             // 修改标志位
             if (has_acked == 0) {
@@ -974,6 +1046,7 @@ xqc_send_ctl_on_ack_received(xqc_send_ctl_t *send_ctl, xqc_pn_ctl_t *pn_ctl, xqc
         }
     }
 
+    xqc_send_ctl_validate_ecn(send_ctl, ack_info, newly_acked_ect0, largest_marked_sent_time);
     /* 此path没有ack */
     if (!has_acked) {
         return XQC_OK;
@@ -992,7 +1065,6 @@ xqc_send_ctl_on_ack_received(xqc_send_ctl_t *send_ctl, xqc_pn_ctl_t *pn_ctl, xqc
 
     }
 
-    /* TODO: ECN */
 
     /* spurious loss */
     if (spurious_loss_detected) {

@@ -93,6 +93,12 @@ xqc_process_recovered_packet(xqc_connection_t *conn, unsigned char *recovered_pa
 
     } else {
         conn->fec_ctl->fec_recover_pkt_cnt++;
+        conn->fec_recovered_packets++;
+        conn->fec_recovered_bytes += symbol_size;
+        /* This receiver-local interval excludes source block fill and transit. */
+        const xqc_usec_t decoded_at = xqc_monotonic_timestamp();
+        if (rpr_recv_time && decoded_at >= rpr_recv_time)
+            conn->fec_repair_wait_us += decoded_at - rpr_recv_time;
     }
     return res;
 }

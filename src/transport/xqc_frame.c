@@ -2215,6 +2215,8 @@ xqc_process_repair_frame(xqc_connection_t *conn, xqc_packet_in_t *packet_in)
 
     conn->fec_ctl->fec_recv_repair_num_total++;
     xqc_memset(&tmp_rpr_syb, 0, sizeof(xqc_fec_rpr_syb_t));
+    if (!(packet_in->pi_flag & XQC_PIF_FEC_RECOVERED))
+        conn->fec_received_repair_packets++;
     block_mod = conn->conn_settings.fec_params.fec_blk_log_mod;
 
     ret = xqc_parse_repair_frame(conn, packet_in, &tmp_rpr_syb);

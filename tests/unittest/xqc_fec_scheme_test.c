@@ -220,6 +220,17 @@ xqc_test_fec_decode()
     CU_ASSERT(ret == -XQC_EFEC_SCHEME_ERROR);
 
 
+    CU_ASSERT(conn->fec_recovered_packets == 0 && conn->fec_recovered_bytes == 0);
+    unsigned char padding[] = {0, 0, 0, 0};
+    xqc_usec_t before = xqc_monotonic_timestamp();
+    ret = xqc_process_recovered_packet(conn, padding, sizeof(padding), before - 1000);
+    CU_ASSERT(ret == XQC_OK);
+    CU_ASSERT(conn->fec_recovered_packets == 1 && conn->fec_recovered_bytes == sizeof(padding));
+    CU_ASSERT(conn->fec_repair_wait_us >= 1000);
+    uint64_t wait = conn->fec_repair_wait_us;
+    ret = xqc_process_recovered_packet(conn, padding, sizeof(padding), 0);
+    CU_ASSERT(ret == XQC_OK && conn->fec_repair_wait_us == wait);
+
     /** init repair symbol */
     xqc_fec_rpr_syb_t symbol;
     xqc_test_init_repair_syb(&symbol);
